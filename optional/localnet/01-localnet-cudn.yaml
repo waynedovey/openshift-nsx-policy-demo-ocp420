@@ -1,0 +1,18 @@
+# Optional example only. Requires a matching OVS bridge mapping on every relevant node.
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
+metadata:
+  name: nsx-demo-vlan
+spec:
+  namespaceSelector:
+    matchLabels:
+      demo.openshift.io/localnet: nsx-demo-vlan
+  network:
+    topology: Localnet
+    localnet:
+      role: Secondary
+      physicalNetworkName: nsx-demo-physnet
+      ipam:
+        lifecycle: Persistent
+      subnets:
+        - 198.18.10.0/24

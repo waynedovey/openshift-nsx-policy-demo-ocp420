@@ -1,0 +1,8 @@
+# Apply with:
+# oc patch network.operator.openshift.io cluster --type=merge --patch-file=00-enable-multinetworkpolicy.yaml
+apiVersion: operator.openshift.io/v1
+kind: Network
+metadata:
+  name: cluster
+spec:
+  useMultiNetworkPolicy: true

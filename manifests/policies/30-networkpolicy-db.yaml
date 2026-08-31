@@ -1,0 +1,38 @@
+# Namespace-owned policy for the Windows 2022 DB VM.
+# Jenkins is allowed only to TCP/1435.
+# Rogue is intentionally allowed to 1435/61435 to prove ANP Deny wins later.
+# APP is intentionally not allowed to prove strong ANP Allow wins later.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress
+  namespace: nsx-demo-db
+spec:
+  podSelector:
+    matchLabels:
+      demo.openshift.io/security-group: db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              demo.openshift.io/role: ops
+          podSelector:
+            matchLabels:
+              demo.openshift.io/security-group: jenkins
+      ports:
+        - protocol: TCP
+          port: 1435
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              demo.openshift.io/role: rogue
+          podSelector:
+            matchLabels:
+              demo.openshift.io/security-group: rogue
+      ports:
+        - protocol: TCP
+          port: 1435
+        - protocol: TCP
+          port: 61435

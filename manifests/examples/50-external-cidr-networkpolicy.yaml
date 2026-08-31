@@ -1,0 +1,48 @@
+# Example only: generic RFC 5737 CIDRs representing external NSX IP Groups.
+# Do not expect these flows to test successfully unless your lab really has sources there.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-ip-groups-to-app
+  namespace: nsx-demo-app
+spec:
+  podSelector:
+    matchLabels:
+      demo.openshift.io/service: app-web
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Example "corporate users" IP Group
+        - ipBlock:
+            cidr: 198.51.100.0/24
+        # Example "load balancers" IP Group
+        - ipBlock:
+            cidr: 203.0.113.0/24
+      ports:
+        # Demo app listens on 8443 because it runs unprivileged.
+        # In a real migrated policy this would commonly be TCP/443.
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: external-ip-groups-to-db
+  namespace: nsx-demo-db
+spec:
+  podSelector:
+    matchLabels:
+      demo.openshift.io/security-group: db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Example data-service IP Group
+        - ipBlock:
+            cidr: 198.51.100.128/25
+      ports:
+        - protocol: TCP
+          port: 1435
+        - protocol: TCP
+          port: 61435

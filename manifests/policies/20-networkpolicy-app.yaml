@@ -1,0 +1,34 @@
+# Application-owned policy for the Windows 2022 APP VM.
+# This deliberately overrides the lower-tier BANP for corporate -> APP:8443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-ingress
+  namespace: nsx-demo-app
+spec:
+  podSelector:
+    matchLabels:
+      demo.openshift.io/service: app-web
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              demo.openshift.io/role: corporate
+          podSelector:
+            matchLabels:
+              demo.openshift.io/security-group: corporate
+      ports:
+        - protocol: TCP
+          port: 8443
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              demo.openshift.io/network: nsx-demo
+          podSelector:
+            matchLabels:
+              demo.openshift.io/security-group: app
+      ports:
+        - protocol: TCP
+          port: 8443

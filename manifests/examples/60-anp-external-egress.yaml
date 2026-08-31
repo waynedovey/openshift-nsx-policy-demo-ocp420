@@ -1,0 +1,22 @@
+# Example only: ANP/BANP "networks" peers are useful for egress to external CIDRs.
+apiVersion: policy.networking.k8s.io/v1alpha1
+kind: AdminNetworkPolicy
+metadata:
+  name: nsx-demo-external-egress-example
+spec:
+  priority: 70
+  subject:
+    namespaces:
+      matchLabels:
+        demo.openshift.io/network: nsx-demo
+  egress:
+    - name: allow-corporate-services
+      action: Allow
+      to:
+        - networks:
+            - 198.51.100.0/24
+    - name: pass-other-external-egress
+      action: Pass
+      to:
+        - networks:
+            - 0.0.0.0/0

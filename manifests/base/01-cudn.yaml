@@ -1,0 +1,20 @@
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
+metadata:
+  name: nsx-demo
+  labels:
+    demo.openshift.io/owner: nsx-policy-demo
+spec:
+  namespaceSelector:
+    matchLabels:
+      demo.openshift.io/network: nsx-demo
+  network:
+    topology: Layer2
+    layer2:
+      role: Primary
+      # RFC 5737 TEST-NET-1. This is an isolated OVN overlay in this demo.
+      subnets:
+        - 192.0.2.0/24
+      # Persistent IP allocation is the VM-friendly Layer2 CUDN design.
+      ipam:
+        lifecycle: Persistent

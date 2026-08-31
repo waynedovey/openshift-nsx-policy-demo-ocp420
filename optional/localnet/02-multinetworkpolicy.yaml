@@ -1,0 +1,28 @@
+# The policy-for annotation must point at the generated NAD for your Localnet CUDN.
+# Verify the NAD name with: oc get network-attachment-definitions -A
+apiVersion: k8s.cni.cncf.io/v1beta1
+kind: MultiNetworkPolicy
+metadata:
+  name: allow-app-to-db-localnet
+  namespace: nsx-demo-db
+  annotations:
+    k8s.v1.cni.cncf.io/policy-for: nsx-demo-db/nsx-demo-vlan
+spec:
+  podSelector:
+    matchLabels:
+      demo.openshift.io/security-group: db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              demo.openshift.io/role: app
+          podSelector:
+            matchLabels:
+              demo.openshift.io/security-group: app
+      ports:
+        - protocol: TCP
+          port: 1435
+        - protocol: TCP
+          port: 61435
