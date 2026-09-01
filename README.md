@@ -463,3 +463,30 @@ See `optional/localnet/`.
 - OpenShift 4.20 advanced VM creation: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/virtualization/advanced-vm-creation
 - OpenShift 4.21 advanced VM creation: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/virtualization/advanced-vm-creation
 - OpenShift 4.21 AdminNetworkPolicy: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/network_security/admin-network-policy
+
+## Windows VM says Ready but demo port is closed
+
+`VirtualMachine Ready=True` means the VMI is running; it does not prove Windows
+completed OOBE/specialization or ran `FirstLogonCommands`.
+
+Run:
+
+```bash
+./scripts/check-windows-bootstrap.sh
+```
+
+Then open the Windows console and check:
+
+```powershell
+Test-Path C:\NSXDemo\configured.txt
+Get-Content C:\NSXDemo\configured.txt
+Get-ScheduledTask -TaskName NSXDemoListeners
+Get-ScheduledTaskInfo -TaskName NSXDemoListeners
+Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 8443,1435,61435,8080
+Get-Content C:\Windows\Panther\UnattendGC\setupact.log -Tail 100
+```
+
+If `C:\NSXDemo\configured.txt` does not exist, Windows did not run the attached
+specialization answer file. Re-check that the source image was generalized with
+`sysprep /generalize /oobe /shutdown /mode:vm` and that no cached answer file
+was left in `C:\Windows\Panther` when the golden image was generalized.

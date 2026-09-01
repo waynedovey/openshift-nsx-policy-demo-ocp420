@@ -42,7 +42,7 @@ oc apply -f "$TMP_PROBES" >/dev/null
 wait_for_probes
 ok "Probe workloads are ready"
 
-info "Generating lab-only guest credentials and Windows sysprep"
+info "Generating RHEL guest credentials and blank-password Windows sysprep"
 ensure_demo_password
 "$ROOT_DIR/scripts/render-sysprep.sh"
 
@@ -101,5 +101,6 @@ info "Baseline connectivity smoke test"
 
 echo
 ok "Demo environment deployed"
-echo "Lab guest credentials are stored locally in: .demo-state/credentials.env"
+echo "RHEL demo credentials are stored locally in: .demo-state/credentials.env"
+echo "Windows Administrator uses a blank password for console-only lab access."
 echo "Run: ./scripts/demo.sh"

@@ -75,3 +75,23 @@ The generated password is never stored in Git. It is written to:
 ```
 
 with local file mode `0600`.
+
+## Lab console login
+
+The demo specialization file intentionally configures the built-in Windows
+`Administrator` account with a **blank password** and enables console autologon.
+This is for the isolated demo only. Windows normally restricts network logon for
+blank-password local accounts, so use the OpenShift Virtualization console for
+interactive administration.
+
+## Bootstrap marker
+
+After a successful first logon, the specialization script creates:
+
+```text
+C:\NSXDemo\configured.txt
+```
+
+and registers the scheduled task `NSXDemoListeners`. If the VM is running but a
+demo port is not listening, run `scripts/check-windows-bootstrap.sh` and inspect
+those two items from the Windows console.

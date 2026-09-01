@@ -1,0 +1,6 @@
+.demo-state/
+*.iso
+*.qcow2
+*.img
+*.raw
+.DS_Store
