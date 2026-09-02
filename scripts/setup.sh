@@ -9,40 +9,42 @@ oc get datasource "$RHEL9_DATASOURCE" -n "$RHEL9_DATASOURCE_NS" >/dev/null || { 
 oc get datasource "$WINDOWS_DATASOURCE" -n "$WINDOWS_DATASOURCE_NS" >/dev/null || { fail "Missing Windows DataSource $WINDOWS_DATASOURCE_NS/$WINDOWS_DATASOURCE"; exit 1; }
 
 info "Checking namespace name collisions"
-for ns in nsx-demo-app nsx-demo-db nsx-demo-ops nsx-demo-corp nsx-demo-rogue; do
-  if oc get ns "$ns" >/dev/null 2>&1; then
-    owner="$(oc get ns "$ns" -o jsonpath='{.metadata.labels.demo\.openshift\.io/owner}' 2>/dev/null || true)"
-    [[ "$owner" == "nsx-policy-demo" ]] || { fail "Namespace $ns exists and is not owned by this demo"; exit 1; }
-    oc get ns "$ns" -o json | grep -q 'k8s.ovn.org/primary-user-defined-network' || { fail "$ns was not created as a primary-UDN namespace"; exit 1; }
-  fi
-done
+check_namespace_collisions || exit 1
 
 "$ROOT_DIR/scripts/reset-policies.sh"
 
-info "Creating demo namespaces"
+info "Creating Primary-CUDN workload namespaces"
 oc apply -f "$ROOT_DIR/manifests/base/00-namespaces.yaml" >/dev/null
+
+info "Creating dedicated default-network admin-policy namespaces"
+oc apply -f "$ROOT_DIR/manifests/base/03-admin-namespaces.yaml" >/dev/null
 
 info "Creating Primary Layer2 CUDN 192.0.2.0/24 with Persistent IPAM"
 oc apply -f "$ROOT_DIR/manifests/base/01-cudn.yaml" >/dev/null
-wait_for_cudn || { fail "CUDN did not become ready"; oc describe cudn nsx-demo || true; exit 1; }
+wait_for_cudn || { fail "CUDN did not become ready"; oc describe clusteruserdefinednetworks.k8s.ovn.org nsx-demo || true; exit 1; }
 ok "CUDN nsx-demo reports NetworkCreated=True"
 
-if [[ -n "${DEMO_IMAGE:-}" ]]; then
-  IMAGE="$DEMO_IMAGE"
-elif oc get istag/network-tools:latest -n openshift >/dev/null 2>&1; then
-  IMAGE="$(oc get istag/network-tools:latest -n openshift -o jsonpath='{.image.dockerImageReference}')"
-else
-  IMAGE="quay.io/openshift/origin-network-tools:latest"
-fi
+IMAGE="$(resolve_probe_image)"
 info "Using probe image: $IMAGE"
-TMP_PROBES="$(mktemp)"
-trap 'rm -f "$TMP_PROBES"' EXIT
-sed "s|__DEMO_IMAGE__|$IMAGE|g" "$ROOT_DIR/manifests/base/02-probes.yaml.tpl" > "$TMP_PROBES"
-oc apply -f "$TMP_PROBES" >/dev/null
+TMP_CUDN_PROBES="$(mktemp)"
+TMP_ADMIN_PROBES="$(mktemp)"
+trap 'rm -f "$TMP_CUDN_PROBES" "$TMP_ADMIN_PROBES"' EXIT
+sed "s|__DEMO_IMAGE__|$IMAGE|g" "$ROOT_DIR/manifests/base/02-probes.yaml.tpl" > "$TMP_CUDN_PROBES"
+sed "s|__DEMO_IMAGE__|$IMAGE|g" "$ROOT_DIR/manifests/base/04-admin-probes.yaml.tpl" > "$TMP_ADMIN_PROBES"
+oc apply -f "$TMP_CUDN_PROBES" >/dev/null
+oc apply -f "$TMP_ADMIN_PROBES" >/dev/null
 wait_for_probes
-ok "Probe workloads are ready"
+ok "CUDN client probes and dedicated admin-policy probes are ready"
 
-info "Generating RHEL guest credentials and blank-password Windows sysprep"
+ADMIN_TARGET_IP="$(wait_for_pod_ip default nsx-admin-app app=admin-app-target 120)" || { fail "Admin target did not report a default-network IP"; exit 1; }
+info "Checking dedicated default-network admin target TCP/8443"
+wait_for_port nsx-admin-corp app=admin-corporate-client "$ADMIN_TARGET_IP" 8443 36 || {
+  fail "Admin target $ADMIN_TARGET_IP:8443 is not reachable before policy. Check nsx-admin-* pods."
+  exit 1
+}
+ok "Dedicated admin-policy plane is reachable before policy"
+
+info "Generating guest credentials and Windows sysprep media"
 ensure_demo_password
 "$ROOT_DIR/scripts/render-sysprep.sh"
 
@@ -78,23 +80,26 @@ wait_for_vm_ready nsx-demo-db win2022-db 30m
 ok "All three VirtualMachine objects report Ready=True"
 
 RHEL_IP="$(wait_for_vm_ip nsx-demo-ops rhel9-ops 300)" || { fail "RHEL9 VMI did not report an IP"; exit 1; }
-APP_IP="$(wait_for_vm_ip nsx-demo-app win2022-app 300)" || { fail "Windows APP VMI did not report an IP. Check QEMU guest agent and NetKVM in the Windows golden image."; exit 1; }
-DB_IP="$(wait_for_vm_ip nsx-demo-db win2022-db 300)" || { fail "Windows DB VMI did not report an IP. Check QEMU guest agent and NetKVM in the Windows golden image."; exit 1; }
+APP_IP="$(wait_for_vm_ip nsx-demo-app win2022-app 300)" || { fail "Windows APP VMI did not report an IP. Check QEMU guest agent."; exit 1; }
+DB_IP="$(wait_for_vm_ip nsx-demo-db win2022-db 300)" || { fail "Windows DB VMI did not report an IP. Check QEMU guest agent."; exit 1; }
 
 info "Waiting for guest-side demo listeners"
-wait_for_port nsx-demo-corp app=corporate-client "$APP_IP" 8443 240 || { fail "win2022-app did not open TCP/8443. Check sysprep FirstLogonCommands and Windows guest drivers."; exit 1; }
-wait_for_port nsx-demo-app app=app-probe "$DB_IP" 1435 240 || { fail "win2022-db did not open TCP/1435. Check sysprep FirstLogonCommands and Windows guest drivers."; exit 1; }
+wait_for_port nsx-demo-corp app=corporate-client "$APP_IP" 8443 240 || { fail "win2022-app did not open TCP/8443"; "$ROOT_DIR/scripts/check-windows-bootstrap.sh" || true; exit 1; }
+wait_for_port nsx-demo-app app=app-probe "$DB_IP" 1435 240 || { fail "win2022-db did not open TCP/1435"; "$ROOT_DIR/scripts/check-windows-bootstrap.sh" || true; exit 1; }
 wait_for_port nsx-demo-corp app=corporate-client "$RHEL_IP" 9090 120 || warn "RHEL9 TCP/9090 listener was not detected; core Windows policy demo can still run"
 
 cat > "$STATE_DIR/ips.env" <<IPS
 export WIN2022_APP_IP='$APP_IP'
 export WIN2022_DB_IP='$DB_IP'
 export RHEL9_OPS_IP='$RHEL_IP'
+export ADMIN_APP_TARGET_IP='$ADMIN_TARGET_IP'
 IPS
 chmod 600 "$STATE_DIR/ips.env"
 
 echo
 "$ROOT_DIR/scripts/show-vms.sh"
+echo
+"$ROOT_DIR/scripts/show-policy-paths.sh"
 echo
 info "Baseline connectivity smoke test"
 "$ROOT_DIR/scripts/test.sh" baseline
@@ -102,5 +107,5 @@ info "Baseline connectivity smoke test"
 echo
 ok "Demo environment deployed"
 echo "RHEL demo credentials are stored locally in: .demo-state/credentials.env"
-echo "Windows Administrator uses a blank password for console-only lab access."
+echo "Windows Administrator uses a generated lab-only password with AutoLogon."
 echo "Run: ./scripts/demo.sh"

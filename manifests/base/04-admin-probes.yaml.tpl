@@ -1,33 +1,39 @@
-# Primary-CUDN client probes used to exercise real Windows VM NetworkPolicy.
+# Dedicated default-network-only workloads for ANP/BANP validation.
 #
-# These namespaces are selected by the nsx-demo Primary Layer2 CUDN. The pods'
-# 192.0.2.x primary addresses are used for the workload-policy tests.
-# Their infrastructure-locked cluster-default-network addresses are NOT used by
-# this demo as application traffic endpoints.
+# These pods live in nsx-admin-* namespaces, which are NOT selected by the
+# Primary CUDN. Their normal pod IPs are therefore routable workload addresses
+# on the cluster default network. This avoids the infrastructure-locked address
+# of a Primary-UDN pod, which is deliberately not used as a workload path.
+#
+# Rendered by scripts/setup.sh or scripts/refresh-policy-demo.sh.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: app-probe
-  namespace: nsx-demo-app
+  name: admin-app-target
+  namespace: nsx-admin-app
   labels:
     demo.openshift.io/owner: nsx-policy-demo
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: app-probe
+      app: admin-app-target
   template:
     metadata:
       labels:
-        app: app-probe
+        app: admin-app-target
+        demo.openshift.io/component: admin-probe
+        demo.openshift.io/policy-target: admin-app
         demo.openshift.io/security-group: app
-        demo.openshift.io/component: probe
     spec:
       containers:
-        - name: client
+        - name: target
           image: "__DEMO_IMAGE__"
           command: ["/bin/sh", "-c"]
-          args: ["exec sleep 2147483647"]
+          args:
+            - |
+              nc -lk 8443 >/tmp/listener-8443.log 2>&1 &
+              exec sleep 2147483647
           resources:
             requests: {cpu: 10m, memory: 32Mi}
             limits: {memory: 128Mi}
@@ -35,49 +41,21 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: jenkins-probe
-  namespace: nsx-demo-ops
+  name: admin-corporate-client
+  namespace: nsx-admin-corp
   labels:
     demo.openshift.io/owner: nsx-policy-demo
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: jenkins-probe
+      app: admin-corporate-client
   template:
     metadata:
       labels:
-        app: jenkins-probe
-        demo.openshift.io/security-group: jenkins
-        demo.openshift.io/component: probe
-    spec:
-      containers:
-        - name: client
-          image: "__DEMO_IMAGE__"
-          command: ["/bin/sh", "-c"]
-          args: ["exec sleep 2147483647"]
-          resources:
-            requests: {cpu: 10m, memory: 32Mi}
-            limits: {memory: 128Mi}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: corporate-client
-  namespace: nsx-demo-corp
-  labels:
-    demo.openshift.io/owner: nsx-policy-demo
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: corporate-client
-  template:
-    metadata:
-      labels:
-        app: corporate-client
+        app: admin-corporate-client
+        demo.openshift.io/component: admin-probe
         demo.openshift.io/security-group: corporate
-        demo.openshift.io/component: probe
     spec:
       containers:
         - name: client
@@ -91,21 +69,49 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rogue-client
-  namespace: nsx-demo-rogue
+  name: admin-jenkins-client
+  namespace: nsx-admin-ops
   labels:
     demo.openshift.io/owner: nsx-policy-demo
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: rogue-client
+      app: admin-jenkins-client
   template:
     metadata:
       labels:
-        app: rogue-client
+        app: admin-jenkins-client
+        demo.openshift.io/component: admin-probe
+        demo.openshift.io/security-group: jenkins
+    spec:
+      containers:
+        - name: client
+          image: "__DEMO_IMAGE__"
+          command: ["/bin/sh", "-c"]
+          args: ["exec sleep 2147483647"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin-rogue-client
+  namespace: nsx-admin-rogue
+  labels:
+    demo.openshift.io/owner: nsx-policy-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: admin-rogue-client
+  template:
+    metadata:
+      labels:
+        app: admin-rogue-client
+        demo.openshift.io/component: admin-probe
         demo.openshift.io/security-group: rogue
-        demo.openshift.io/component: probe
     spec:
       containers:
         - name: client

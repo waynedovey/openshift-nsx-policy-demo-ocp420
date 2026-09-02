@@ -1,20 +1,20 @@
-# Baseline cluster-admin guardrail on the dedicated default-network policy plane.
+# Mandatory cluster-admin policy on the dedicated default-network policy plane.
 #
-# Stage 1 behavior:
-#   admin-corporate -> admin-app-target:8443  DENY
-#   admin-jenkins   -> admin-app-target:8443  DENY
-#   admin-rogue     -> admin-app-target:8443  ALLOW (no BANP rule)
-#
-# Stage 4 later adds ANP to demonstrate precedence:
-#   Corporate ANP Allow overrides this BANP Deny.
-#   Jenkins ANP Pass delegates down and this BANP Deny still applies.
+# Stage 4 demonstrates all three useful ANP actions and precedence over BANP:
+#   admin-corporate -> admin-app-target:8443  Allow
+#       authoritative ANP Allow; overrides lower BANP Deny
+#   admin-rogue -> admin-app-target:8443      Deny
+#       authoritative central Deny
+#   admin-jenkins -> admin-app-target:8443    Pass
+#       delegates to lower tiers; BANP Deny then blocks it
 apiVersion: policy.networking.k8s.io/v1alpha1
-kind: BaselineAdminNetworkPolicy
+kind: AdminNetworkPolicy
 metadata:
-  name: default
+  name: nsx-demo-admin-guardrail
   labels:
     demo.openshift.io/owner: nsx-policy-demo
 spec:
+  priority: 20
   subject:
     pods:
       namespaceSelector:
@@ -25,8 +25,8 @@ spec:
         matchLabels:
           demo.openshift.io/policy-target: admin-app
   ingress:
-    - name: baseline-deny-corporate
-      action: Deny
+    - name: allow-corporate
+      action: Allow
       from:
         - pods:
             namespaceSelector:
@@ -41,8 +41,24 @@ spec:
             protocol: TCP
             port: 8443
 
-    - name: baseline-deny-jenkins
+    - name: deny-rogue
       action: Deny
+      from:
+        - pods:
+            namespaceSelector:
+              matchLabels:
+                demo.openshift.io/policy-plane: admin
+                demo.openshift.io/admin-role: rogue
+            podSelector:
+              matchLabels:
+                demo.openshift.io/security-group: rogue
+      ports:
+        - portNumber:
+            protocol: TCP
+            port: 8443
+
+    - name: pass-jenkins
+      action: Pass
       from:
         - pods:
             namespaceSelector:

@@ -7,9 +7,9 @@ Windows installation media is not bundled with OpenShift Virtualization. This de
 Before using the image as the demo golden source, make sure it contains:
 
 - Windows Server 2022
-- VirtIO storage driver
-- VirtIO NetKVM network driver
-- QEMU guest agent
+- QEMU guest agent installed and configured for automatic startup
+- the Windows storage/network drivers required by the source VM
+- a system disk that can boot when presented as SATA (the demo clones use SATA deliberately)
 - successful boot on OpenShift Virtualization
 
 Then generalize it from Windows:
@@ -18,7 +18,7 @@ Then generalize it from Windows:
 %WINDIR%\System32\Sysprep\sysprep.exe /generalize /shutdown /oobe /mode:vm
 ```
 
-Do not boot the generalized disk again before capturing/exporting it as the golden source.
+Before running Sysprep on the source VM, set its run strategy so a guest shutdown is not immediately restarted (for example `RerunOnFailure`). Do not boot the generalized disk again before capturing/exporting it as the golden source.
 
 ## Option 1 - upload a QCOW2
 
@@ -29,7 +29,7 @@ Do not boot the generalized disk again before capturing/exporting it as the gold
 The default source becomes:
 
 ```text
-openshift-virtualization-os-images/win2022-demo
+openshift-virtualization-os-images/win2022-demo-v2
 ```
 
 The helper uses the OpenShift Virtualization supported `virtctl image-upload dv --datasource` workflow.
@@ -39,14 +39,14 @@ The helper uses the OpenShift Virtualization supported `virtctl image-upload dv 
 If the generalized disk already exists as a PVC:
 
 ```bash
-./scripts/register-windows-pvc.sh <namespace> <pvc-name> win2022-demo
+./scripts/register-windows-pvc.sh <namespace> <pvc-name> win2022-demo-v2
 ```
 
 Then export:
 
 ```bash
 export WINDOWS_DATASOURCE_NS=<namespace>
-export WINDOWS_DATASOURCE=win2022-demo
+export WINDOWS_DATASOURCE=win2022-demo-v2
 ```
 
 or put those values in `config/lab.env`.
@@ -60,13 +60,13 @@ win2022-app
 win2022-db
 ```
 
-Each VM receives a generated `unattend.xml` sysprep secret that:
+Each VM receives sysprep media from a Secret containing `unattend.xml` and `bootstrap.ps1`. The answer file:
 
 - gives the clone a unique hostname
 - sets a lab-only Administrator password
-- opens the demo TCP ports in Windows Firewall
-- creates a scheduled PowerShell listener task
-- starts the QEMU guest agent service if installed
+- invokes the separate `bootstrap.ps1` at first logon
+
+The bootstrap script then opens the demo TCP ports in Windows Firewall, creates a scheduled PowerShell listener task, and starts the QEMU guest agent service if installed.
 
 The generated password is never stored in Git. It is written to:
 
@@ -79,10 +79,8 @@ with local file mode `0600`.
 ## Lab console login
 
 The demo specialization file intentionally configures the built-in Windows
-`Administrator` account with a **blank password** and enables console autologon.
-This is for the isolated demo only. Windows normally restricts network logon for
-blank-password local accounts, so use the OpenShift Virtualization console for
-interactive administration.
+`Administrator` account with a **generated lab password with AutoLogon** and enables console autologon.
+This is for the isolated demo only. The password is retained only as a lab credential; AutoLogon means it is not entered during normal demo startup. Use the OpenShift Virtualization console for interactive administration.
 
 ## Bootstrap marker
 

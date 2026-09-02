@@ -1,0 +1,41 @@
+# Dedicated cluster-default-network namespaces for the ANP/BANP portion of the demo.
+#
+# IMPORTANT: these namespaces intentionally DO NOT carry
+# k8s.ovn.org/primary-user-defined-network. They are not selected by the nsx-demo
+# CUDN and therefore use the normal OVN-Kubernetes cluster default network as
+# their workload network.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nsx-admin-app
+  labels:
+    demo.openshift.io/owner: nsx-policy-demo
+    demo.openshift.io/policy-plane: admin
+    demo.openshift.io/admin-role: app
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nsx-admin-corp
+  labels:
+    demo.openshift.io/owner: nsx-policy-demo
+    demo.openshift.io/policy-plane: admin
+    demo.openshift.io/admin-role: corporate
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nsx-admin-ops
+  labels:
+    demo.openshift.io/owner: nsx-policy-demo
+    demo.openshift.io/policy-plane: admin
+    demo.openshift.io/admin-role: ops
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nsx-admin-rogue
+  labels:
+    demo.openshift.io/owner: nsx-policy-demo
+    demo.openshift.io/policy-plane: admin
+    demo.openshift.io/admin-role: rogue

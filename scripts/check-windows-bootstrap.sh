@@ -3,25 +3,29 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 require_oc
 
-for item in "nsx-demo-app win2022-app 8443" "nsx-demo-db win2022-db 1435"; do
-  read -r ns vm port <<<"$item"
+for item in "nsx-demo-app win2022-app 8443" "nsx-demo-db win2022-db 1435,61435,8080"; do
+  read -r ns vm ports <<<"$item"
   echo "=== $ns/$vm ==="
   oc get vm "$vm" -n "$ns" -o custom-columns='NAME:.metadata.name,READY:.status.ready,PRINTABLE:.status.printableStatus' || true
-  echo -n "IP: "
-  vm_ip "$ns" "$vm" || true
+  echo -n "IP: "; vm_ip "$ns" "$vm" || true; echo
+  echo -n "Sysprep Secret keys: "
+  oc get secret "${vm}-sysprep" -n "$ns" -o go-template='{{range $k, $v := .data}}{{printf "%s " $k}}{{end}}' 2>/dev/null || true
   echo
-  echo "Sysprep secret key:"
-  oc get secret "${vm}-sysprep" -n "$ns" -o jsonpath='{.data.unattend\.xml}' >/dev/null 2>&1 \
-    && echo "  PASS unattend.xml present" \
-    || echo "  FAIL unattend.xml missing"
-  echo "Expected listener port: $port"
+  echo "Expected listener ports: $ports"
   echo
- done
+done
 
-echo "From the Windows console run:"
-echo "  Test-Path C:\\NSXDemo\\configured.txt"
-echo "  Get-Content C:\\NSXDemo\\configured.txt"
-echo "  Get-ScheduledTask -TaskName NSXDemoListeners"
-echo "  Get-ScheduledTaskInfo -TaskName NSXDemoListeners"
-echo "  Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 8443,1435,61435,8080"
-echo "  Get-Content C:\\Windows\\Panther\\UnattendGC\\setupact.log -Tail 100"
+cat <<'TXT'
+From each Windows console, run:
+  Test-Path C:\NSXDemo\configured.txt
+  Get-ChildItem C:\NSXDemo -ErrorAction SilentlyContinue
+  Get-Content C:\NSXDemo\bootstrap.log -Tail 100 -ErrorAction SilentlyContinue
+  Get-Content C:\NSXDemo\bootstrap-error.txt -ErrorAction SilentlyContinue
+  Get-ScheduledTask -TaskName NSXDemoListeners -ErrorAction SilentlyContinue
+  Get-ScheduledTaskInfo -TaskName NSXDemoListeners -ErrorAction SilentlyContinue
+  Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 8443,1435,61435,8080
+
+If C:\NSXDemo does not exist, inspect Windows setup logs:
+  Get-Content C:\Windows\Panther\setuperr.log -Tail 100
+  Get-Content C:\Windows\Panther\UnattendGC\setupact.log -Tail 150
+TXT

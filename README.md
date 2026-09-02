@@ -1,492 +1,264 @@
-# NSX-T -> OpenShift Network Policy Demo
+# NSX-T Policy Migration Demo for OpenShift 4.20
 
-A working OpenShift Virtualization demo that shows how an NSX-T style security policy maps to:
+GitHub-ready demo that maps common NSX-T segmentation and distributed-firewall concepts to OpenShift networking and network security controls.
 
-- `ClusterUserDefinedNetwork` (CUDN)
-- `AdminNetworkPolicy` (ANP)
-- namespace `NetworkPolicy`
-- `BaselineAdminNetworkPolicy` (BANP)
-- workload labels as security-group membership
+The repository targets the **OpenShift 4.20 feature/API set** and has been exercised on an **OpenShift 4.21.10 lab** with OVN-Kubernetes and OpenShift Virtualization.
 
-The lab cluster is **OpenShift 4.21.10**, while the demo is deliberately constrained to the feature/API set used for an **OpenShift 4.20 target**.
+## Final validated architecture
 
-## The actual lab this repo targets
+Live testing established two separate, reliable policy planes:
 
-| Item | Lab value |
-|---|---|
-| OpenShift server | 4.21.10 |
-| Target design | OpenShift 4.20 |
-| Kubernetes | v1.34.6 |
-| Network provider | OVN-Kubernetes |
-| Node / underlay network | 10.10.10.0/24 |
-| Cluster pod network | 10.132.0.0/14 |
-| Service network | 172.31.0.0/16 |
-| Demo CUDN | 192.0.2.0/24 |
-| OpenShift Virtualization | Installed |
-| Default storage | `ocs-external-storagecluster-ceph-rbd` |
-| MultiNetworkPolicy | Disabled; not required for the main demo |
+| Demo plane | Network | Workloads | Policy API |
+|---|---|---|---|
+| Workload microsegmentation | Primary Layer2 CUDN `192.0.2.0/24` | Windows APP, Windows DB, RHEL and CUDN client probes | `NetworkPolicy` |
+| Administrative policy hierarchy | Cluster default network | dedicated `nsx-admin-*` pods | `AdminNetworkPolicy` + `BaselineAdminNetworkPolicy` |
 
-## What is deployed
+The dedicated admin namespaces **do not** have the `k8s.ovn.org/primary-user-defined-network` label. They are ordinary default-network-only namespaces. This is deliberate.
 
-This version uses **real virtual machines** as the protected workloads:
+A Primary-CUDN pod also receives an infrastructure-locked cluster-network address, but validation showed that address is not a suitable workload endpoint for this demo. The final repository never uses it for ANP/BANP connectivity tests.
+
+## Topology
 
 ```text
-                         Primary Layer2 CUDN
-                            192.0.2.0/24
-                       Persistent IP allocation
-                                   |
-             +---------------------+---------------------+
-             |                     |                     |
-             v                     v                     v
-      Windows Server 2022   Windows Server 2022        RHEL 9
-         win2022-app           win2022-db            rhel9-ops
-         sg = app              sg = db              sg = jenkins
-         TCP/8443         TCP/1435,61435,8080        TCP/9090
+                        OpenShift cluster
+
+     WORKLOAD PLANE                         ADMIN POLICY PLANE
+     --------------                         ------------------
+
+ Primary Layer2 CUDN                     Cluster default network
+ nsx-demo 192.0.2.0/24                   dedicated nsx-admin-* namespaces
+          |                                       |
+   +------+------+                         +------+------+------+
+   |             |                         |      |      |      |
+Win APP       Win DB                    target   corp  jenkins rogue
+:8443        :1435/:61435/:8080         :8443
+   |             |                         |
+   +-- NetworkPolicy                      +-- BANP / ANP
 ```
 
-Four tiny probe pods are also created. They exist only to automate the connectivity matrix during the presentation:
+## Workloads
 
-- `app-probe`
-- `jenkins-probe`
-- `corporate-client`
-- `rogue-client`
+### Primary CUDN workload plane
 
-The policy **destinations are the Windows VM launcher pods / guest interfaces**, not fake application server pods.
+| Namespace | Workload | Purpose |
+|---|---|---|
+| `nsx-demo-app` | `win2022-app` | Windows Server 2022 APP VM, TCP/8443 |
+| `nsx-demo-db` | `win2022-db` | Windows Server 2022 DB VM, TCP/1435, 61435, 8080 |
+| `nsx-demo-ops` | `rhel9-ops` | RHEL 9 OPS VM, TCP/9090 |
+| `nsx-demo-app` | `app-probe` | APP-group CUDN source |
+| `nsx-demo-ops` | `jenkins-probe` | Jenkins-style CUDN source |
+| `nsx-demo-corp` | `corporate-client` | corporate CUDN source |
+| `nsx-demo-rogue` | `rogue-client` | rogue CUDN source |
+
+### Dedicated default-network admin policy plane
+
+| Namespace | Workload | Purpose |
+|---|---|---|
+| `nsx-admin-app` | `admin-app-target` | ANP/BANP target, TCP/8443 |
+| `nsx-admin-corp` | `admin-corporate-client` | corporate admin-policy source |
+| `nsx-admin-ops` | `admin-jenkins-client` | Jenkins admin-policy source |
+| `nsx-admin-rogue` | `admin-rogue-client` | rogue admin-policy source |
 
 ## NSX-T mapping
 
-```text
-NSX-T                              OpenShift
------------------------------------------------------------------
-NSX Segment                  ->    ClusterUserDefinedNetwork
-NSX Security Group           ->    VM / pod labels
-NSX Dynamic Group            ->    label selectors
-NSX IP Group                 ->    NetworkPolicy ipBlock
-Central DFW rule             ->    AdminNetworkPolicy
-Application firewall rule    ->    namespace NetworkPolicy
-Bottom/default guardrail     ->    BaselineAdminNetworkPolicy
-VLAN-backed segment          ->    Localnet CUDN + MultiNetworkPolicy
-```
+| NSX-T concept | OpenShift demo equivalent |
+|---|---|
+| Segment / logical switch | `ClusterUserDefinedNetwork` |
+| Security Group | labels |
+| Dynamic Group | label selectors |
+| IP Group | `NetworkPolicy` `ipBlock` example |
+| Application DFW microsegmentation | namespace `NetworkPolicy` on the Primary CUDN |
+| Mandatory central admin rule | `AdminNetworkPolicy` on dedicated default-network workloads |
+| Baseline/fallback guardrail | `BaselineAdminNetworkPolicy` on dedicated default-network workloads |
+| VLAN-backed secondary network | optional Localnet CUDN + `MultiNetworkPolicy` example |
 
-## Why the CUDN uses 192.0.2.0/24
+## Requirements
 
-The real cluster already uses:
-
-```text
-Nodes:       10.10.10.0/24
-Pods:        10.132.0.0/14
-Services:    172.31.0.0/16
-```
-
-The demo CUDN uses `192.0.2.0/24` (TEST-NET-1), which is intentionally obvious as documentation/demo addressing and does not overlap those lab ranges.
-
-The CUDN is a **Primary Layer2** network with:
-
-```yaml
-ipam:
-  lifecycle: Persistent
-```
-
-That is the VM-friendly design because a VM keeps a consistent address across restarts and migration scenarios.
-
-# Important Windows prerequisite
-
-OpenShift does not provide Microsoft Windows Server media for you. The repo therefore expects one **generalized Windows Server 2022 boot source**.
-
-The Windows image should already contain:
-
-- VirtIO storage driver
-- VirtIO `NetKVM` network driver
-- QEMU guest agent
-- Windows Server 2022 already installed
-- UEFI-bootable system disk (the demo VM explicitly uses UEFI with Secure Boot disabled)
-- `sysprep /generalize` completed before it becomes the golden source
-
-The setup clones that source twice and specializes the clones as:
-
-```text
-WIN2022-APP
-WIN2022-DB
-```
-
-The generated sysprep configuration also starts simple TCP listeners so the network-policy demo can test real guest traffic.
-
-## Check available boot sources
-
-```bash
-./scripts/discover-boot-sources.sh
-```
-
-The default expected RHEL source is:
-
-```text
-openshift-virtualization-os-images/rhel9
-```
-
-The default Windows source is:
-
-```text
-openshift-virtualization-os-images/win2022-demo
-```
-
-## If you already have a generalized Windows 2022 QCOW2
-
-Upload it once:
-
-```bash
-./scripts/import-windows-image.sh /path/to/generalized-win2022.qcow2
-```
-
-or:
-
-```bash
-make import-windows WINDOWS_IMAGE=/path/to/generalized-win2022.qcow2
-```
-
-This uses `virtctl image-upload --datasource` and creates a reusable `DataSource` named `win2022-demo`.
-
-If your image needs more than the default 64 GiB target:
-
-```bash
-WINDOWS_IMAGE_SIZE=100Gi \
-  ./scripts/import-windows-image.sh /path/to/generalized-win2022.qcow2
-```
-
-## If a generalized Windows PVC already exists in the cluster
-
-Register it as a DataSource instead of uploading it again:
-
-```bash
-./scripts/register-windows-pvc.sh <namespace> <pvc-name> win2022-demo
-```
-
-Then set the source namespace for the current shell or in `config/lab.env`:
-
-```bash
-export WINDOWS_DATASOURCE_NS=<namespace>
-export WINDOWS_DATASOURCE=win2022-demo
-```
-
-# Deploy the lab
-
-## 1. Optional configuration
-
-```bash
-cp config/lab.env.example config/lab.env
-```
-
-Edit only if your boot-source names differ.
-
-Load it:
-
-```bash
-source config/lab.env
-```
-
-## 2. Preflight
-
-```bash
-./scripts/preflight.sh
-```
-
-The preflight verifies:
-
-- 4.20 or 4.21 lab version
+- OpenShift 4.20 or 4.21 lab
 - OVN-Kubernetes
-- CUDN API
-- ANP and BANP APIs
 - OpenShift Virtualization
-- permissions
-- no conflicting BANP
+- `ClusterUserDefinedNetwork` API
+- `AdminNetworkPolicy` API
+- `BaselineAdminNetworkPolicy` API
 - RHEL 9 DataSource
-- Windows Server 2022 DataSource
+- generalized Windows Server 2022 DataSource
+- permissions to create namespaces, deployments, CUDN, NetworkPolicy, ANP and BANP
 
-## 3. Setup
-
-```bash
-./scripts/setup.sh
-```
-
-or:
-
-```bash
-make setup
-```
-
-Setup creates:
-
-1. five demo namespaces
-2. `nsx-demo` Primary Layer2 CUDN
-3. four tiny network probe pods
-4. RHEL 9 VM x1
-5. Windows Server 2022 VM x2
-6. sysprep secrets for the Windows VMs
-7. TCP listeners in the guests
-8. a baseline connectivity smoke test
-
-Initial Windows clone/specialization can take several minutes.
-
-## 4. Show the VMs
-
-```bash
-./scripts/show-vms.sh
-```
-
-Example output:
+Default Windows DataSource:
 
 ```text
-NAMESPACE        VM                 OS           CUDN-IP          STATUS
-nsx-demo-app     win2022-app        Windows-2022 192.0.2.x        True
-nsx-demo-db      win2022-db         Windows-2022 192.0.2.x        True
-nsx-demo-ops     rhel9-ops          RHEL-9       192.0.2.x        True
+openshift-virtualization-os-images/win2022-demo-v2
 ```
 
-# Run the live policy demo
+Override values in `config/lab.env` if needed.
+
+## Existing working VM lab: upgrade to this final demo
+
+If your Windows/RHEL VMs are already running, you do **not** need to recreate them.
 
 ```bash
+./scripts/validate-repo.sh
+./scripts/preflight.sh
+./scripts/refresh-policy-demo.sh
+```
+
+`refresh-policy-demo.sh`:
+
+1. resets only demo policy objects;
+2. creates the four new `nsx-admin-*` default-network namespaces;
+3. updates the CUDN client probes;
+4. creates the dedicated admin-policy probes;
+5. proves the admin target is reachable before policy;
+6. runs the full baseline test.
+
+It does not recreate the Windows or RHEL VMs.
+
+Then:
+
+```bash
+./scripts/show-policy-paths.sh
 ./scripts/demo.sh
 ```
 
-For a non-interactive run:
+## Fresh deployment
 
 ```bash
-DEMO_AUTO=true ./scripts/demo.sh
+./scripts/validate-repo.sh
+./scripts/preflight.sh
+./scripts/setup.sh
+./scripts/demo.sh
 ```
 
-## Stage 0 - CUDN only
+## Demo stages
 
-No policy is present.
+### Stage 0 — topology only
+
+No firewall policies are present.
+
+Expected examples:
 
 ```text
-Corporate -> Win2022 APP:8443       ALLOW
-APP       -> Win2022 DB:1435        ALLOW
-Rogue     -> Win2022 DB:1435        ALLOW
-Jenkins   -> Win2022 DB:61435       ALLOW
+CUDN Corporate -> WinAPP:8443    ALLOW
+CUDN APP -> WinDB:1435           ALLOW
+CUDN Rogue -> WinDB:1435         ALLOW
+ADMIN Corporate -> target:8443   ALLOW
+ADMIN Jenkins -> target:8443     ALLOW
+ADMIN Rogue -> target:8443       ALLOW
 ```
 
-Talking point:
+Talking point: the CUDN is the NSX Segment equivalent; creating the logical network does not itself create firewall rules.
 
-> CUDN creates the network. It is not the firewall.
+### Stage 1 — BANP baseline
 
-## Stage 1 - BANP
-
-BANP says:
+Applies `manifests/policies/10-banp-app-guardrail.yaml`.
 
 ```text
-Corporate -> Win2022 APP:8443       DENY
+ADMIN Corporate -> target:8443   DENY
+ADMIN Jenkins -> target:8443     DENY
+ADMIN Rogue -> target:8443       ALLOW
+CUDN Corporate -> WinAPP:8443    ALLOW
 ```
 
-Talking point:
+Talking point: BANP supplies a cluster-admin baseline on the admin policy plane, independently of the VM CUDN workload plane.
 
-> BANP is the bottom-level cluster guardrail.
+### Stage 2 — Windows APP NetworkPolicy
 
-## Stage 2 - namespace NetworkPolicy
-
-The APP namespace explicitly permits corporate traffic:
+Applies `manifests/policies/20-networkpolicy-app.yaml`.
 
 ```text
-Corporate -> Win2022 APP:8443       ALLOW
+CUDN Corporate -> WinAPP:8443    DENY
+CUDN APP -> WinAPP:8443          ALLOW
 ```
 
-Talking point:
+This is the real Windows VM microsegmentation demonstration.
 
-> Namespace NetworkPolicy can override the lower-tier BANP.
+### Stage 3 — Windows DB NetworkPolicy
 
-## Stage 3 - DB NetworkPolicy
+Applies `manifests/policies/30-networkpolicy-db.yaml`.
 
 ```text
-Jenkins -> Win2022 DB:1435          ALLOW
-Jenkins -> Win2022 DB:61435         DENY
-Rogue  -> Win2022 DB:1435           ALLOW
-APP    -> Win2022 DB:1435           DENY
+CUDN APP -> WinDB:1435           ALLOW
+CUDN APP -> WinDB:61435          ALLOW
+CUDN APP -> WinDB:8080           DENY
+CUDN Jenkins -> WinDB:1435       ALLOW
+CUDN Jenkins -> WinDB:61435      DENY
+CUDN Rogue -> WinDB:1435         DENY
 ```
 
-Rogue is deliberately allowed here to set up the ANP demonstration.
+The manifest also includes the simplified SQL/MSDTC ranges TCP/135, 10000-11000 and 49152-65535 for APP-group sources.
 
-## Stage 4 - AdminNetworkPolicy
+### Stage 4 — ANP + BANP precedence
 
-Central security applies the NSX-style DFW policy:
+Applies `manifests/policies/40-adminnetworkpolicy-default-network.yaml` while the Stage 1 BANP remains present.
 
 ```text
-APP     -> Win2022 DB:1435          ALLOW   ANP Allow
-APP     -> Win2022 DB:61435         ALLOW   ANP Allow
-APP     -> Win2022 DB:8080          DENY
-Rogue   -> Win2022 DB:1435          DENY    ANP Deny
-Jenkins -> Win2022 DB:1435          ALLOW   ANP Pass -> NP Allow
-Jenkins -> Win2022 DB:61435         DENY    ANP Pass -> NP no allow
-Corporate -> Win2022 APP:8443       ALLOW   NP overrides BANP
+ADMIN Corporate -> target:8443   ALLOW  # ANP Allow overrides lower BANP Deny
+ADMIN Rogue -> target:8443       DENY   # ANP Deny
+ADMIN Jenkins -> target:8443     DENY   # ANP Pass -> BANP Deny
 ```
 
-This is the key showcase:
+The Windows VM NetworkPolicies remain active at the same time.
 
-```text
-              AdminNetworkPolicy
-             /         |          \
-          Allow       Deny        Pass
-            |           |           |
-          ALLOW        DENY         v
-                               NetworkPolicy
-                                   |
-                                   v
-                     BaselineAdminNetworkPolicy
-```
-
-# Prove actual VM guest networking
-
-The automated harness uses probe pods so the presentation is repeatable. You can also prove **VM-to-VM** connectivity from inside the guests.
-
-Print the exact commands and current VM IPs:
+## Run individual tests
 
 ```bash
-./scripts/manual-vm-tests.sh
-```
-
-Examples:
-
-### From `WIN2022-APP` PowerShell
-
-```powershell
-Test-NetConnection <win2022-db-ip> -Port 1435
-Test-NetConnection <win2022-db-ip> -Port 61435
-Test-NetConnection <win2022-db-ip> -Port 8080
-```
-
-### From `rhel9-ops`
-
-```bash
-timeout 3 bash -c '</dev/tcp/<win2022-db-ip>/1435' && echo ALLOW || echo DENY
-```
-
-For primary UDN VMs, use the OpenShift Virtualization web/VNC/serial console. `virtctl ssh` and `oc port-forward` are not supported for this primary UDN design.
-
-# Useful presentation commands
-
-```bash
-oc get cudn nsx-demo -o yaml
-oc get vm -A -l demo.openshift.io/owner=nsx-policy-demo
-oc get vmi -A
-oc get pods -A -l demo.openshift.io/component=vm --show-labels
-oc get anp
-oc get banp
-oc get networkpolicy -A
-```
-
-Show the security-group labels on VM launcher pods:
-
-```bash
-oc get pods -A -l demo.openshift.io/component=vm \
-  -L demo.openshift.io/security-group \
-  -L demo.openshift.io/service
-```
-
-Re-run the final matrix:
-
-```bash
+./scripts/test.sh baseline
+./scripts/test.sh banp
+./scripts/test.sh app-np
+./scripts/test.sh db-np
 ./scripts/test.sh final
 ```
 
-Reset only policy:
+## Diagnostics
 
 ```bash
-./scripts/reset-policies.sh
+./scripts/show-vms.sh
+./scripts/show-policy-paths.sh
+./scripts/check-windows-bootstrap.sh
+./scripts/doctor.sh
 ```
 
-Remove the demo:
+Show the dedicated admin namespaces and verify that they have no Primary UDN label:
+
+```bash
+oc get ns nsx-admin-app nsx-admin-corp nsx-admin-ops nsx-admin-rogue --show-labels
+```
+
+Show policies:
+
+```bash
+oc get banp
+oc get anp
+oc get networkpolicy -A | grep nsx-demo
+```
+
+## Windows fixes retained in this build
+
+The Windows VM templates use a **SATA root disk** because the generalized lab image did not have the VirtIO block boot driver staged as a boot-critical driver. Using VirtIO for the root disk produced `INACCESSIBLE_BOOT_DEVICE`.
+
+Sysprep media contains:
+
+```text
+unattend.xml
+bootstrap.ps1
+```
+
+`FirstLogonCommands` contains only a short command that locates and executes `bootstrap.ps1`, avoiding the Windows unattend `CommandLine` length problem.
+
+See `docs/WINDOWS-BOOT-SOURCE.md` and `docs/FIXES-IN-THIS-BUILD.md`.
+
+## Cleanup
 
 ```bash
 ./scripts/cleanup.sh
 ```
 
-`cleanup.sh` intentionally **does not delete reusable OS boot sources**.
+The cleanup order is deliberate: remove policy/workloads, remove the CUDN and generated NADs, then remove both the CUDN and admin demo namespaces. Reusable OS DataSources remain untouched.
 
-# MultiNetworkPolicy / Localnet
+## MultiNetworkPolicy
 
-Your current lab has:
+`MultiNetworkPolicy` is not required for the main demo. `optional/localnet/` remains a separate secondary Localnet/VLAN example.
 
-```text
-useMultiNetworkPolicy=false
-```
+## Scope
 
-Leave it that way for the main demo.
-
-Primary Layer2 CUDN uses normal `NetworkPolicy`. `MultiNetworkPolicy` is only needed if you later add a **secondary Localnet CUDN / physical VLAN** interface. OpenShift 4.20 and 4.21 use the iptables implementation for that MultiNetworkPolicy path.
-
-See `optional/localnet/`.
-
-# Repository layout
-
-```text
-.
-├── README.md
-├── Makefile
-├── config
-│   └── lab.env.example
-├── docs
-│   ├── ARCHITECTURE.md
-│   ├── DEMO-GUIDE.md
-│   └── WINDOWS-BOOT-SOURCE.md
-├── manifests
-│   ├── base
-│   │   ├── 00-namespaces.yaml
-│   │   ├── 01-cudn.yaml
-│   │   └── 02-probes.yaml.tpl
-│   ├── vms
-│   │   ├── 10-rhel9-ops.yaml.tpl
-│   │   ├── 11-win2022-app.yaml.tpl
-│   │   ├── 12-win2022-db.yaml.tpl
-│   │   └── sysprep/unattend.xml.tpl
-│   ├── policies
-│   │   ├── 10-banp-app-guardrail.yaml
-│   │   ├── 20-networkpolicy-app.yaml
-│   │   ├── 30-networkpolicy-db.yaml
-│   │   └── 40-adminnetworkpolicy-db.yaml
-│   └── examples
-├── optional/localnet
-└── scripts
-    ├── preflight.sh
-    ├── discover-boot-sources.sh
-    ├── import-windows-image.sh
-    ├── register-windows-pvc.sh
-    ├── setup.sh
-    ├── show-vms.sh
-    ├── demo.sh
-    ├── test.sh
-    ├── manual-vm-tests.sh
-    ├── reset-policies.sh
-    └── cleanup.sh
-```
-
-# Red Hat references
-
-- OpenShift 4.20 Virtualization networking: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/virtualization/networking
-- OpenShift 4.21 Virtualization networking: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/virtualization/networking
-- OpenShift 4.20 advanced VM creation: https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/virtualization/advanced-vm-creation
-- OpenShift 4.21 advanced VM creation: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/virtualization/advanced-vm-creation
-- OpenShift 4.21 AdminNetworkPolicy: https://docs.redhat.com/en/documentation/openshift_container_platform/4.21/html/network_security/admin-network-policy
-
-## Windows VM says Ready but demo port is closed
-
-`VirtualMachine Ready=True` means the VMI is running; it does not prove Windows
-completed OOBE/specialization or ran `FirstLogonCommands`.
-
-Run:
-
-```bash
-./scripts/check-windows-bootstrap.sh
-```
-
-Then open the Windows console and check:
-
-```powershell
-Test-Path C:\NSXDemo\configured.txt
-Get-Content C:\NSXDemo\configured.txt
-Get-ScheduledTask -TaskName NSXDemoListeners
-Get-ScheduledTaskInfo -TaskName NSXDemoListeners
-Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 8443,1435,61435,8080
-Get-Content C:\Windows\Panther\UnattendGC\setupact.log -Tail 100
-```
-
-If `C:\NSXDemo\configured.txt` does not exist, Windows did not run the attached
-specialization answer file. Re-check that the source image was generalized with
-`sysprep /generalize /oobe /shutdown /mode:vm` and that no cached answer file
-was left in `C:\Windows\Panther` when the golden image was generalized.
+The CUDN and policy-path decisions in this repo reflect behavior validated in the OCP 4.21.10 lab while keeping the demo on the OCP 4.20 API/feature set. Re-test behavior when moving the demo to a materially newer OpenShift release.

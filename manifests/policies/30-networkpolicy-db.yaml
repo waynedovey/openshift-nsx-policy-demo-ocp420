@@ -1,19 +1,52 @@
-# Namespace-owned policy for the Windows 2022 DB VM.
-# Jenkins is allowed only to TCP/1435.
-# Rogue is intentionally allowed to 1435/61435 to prove ANP Deny wins later.
-# APP is intentionally not allowed to prove strong ANP Allow wins later.
+# Namespace-owned microsegmentation for the REAL Windows Server 2022 DB VM on
+# the Primary Layer2 CUDN.
+#
+# Mapping used by the demo:
+#   APP     -> DB:1435                  ALLOW
+#   APP     -> DB:61435                 ALLOW
+#   APP     -> DB:135                   ALLOW
+#   APP     -> DB:10000-11000           ALLOW
+#   APP     -> DB:49152-65535           ALLOW
+#   Jenkins -> DB:1435                  ALLOW
+#   Jenkins -> DB:61435                 DENY (not in allow list)
+#   Rogue   -> DB:any                   DENY (not in allow list)
+#   APP     -> DB:8080                  DENY (not in allow list)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress
   namespace: nsx-demo-db
+  labels:
+    demo.openshift.io/owner: nsx-policy-demo
 spec:
   podSelector:
     matchLabels:
+      demo.openshift.io/component: vm
       demo.openshift.io/security-group: db
   policyTypes:
     - Ingress
   ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              demo.openshift.io/role: app
+          podSelector:
+            matchLabels:
+              demo.openshift.io/security-group: app
+      ports:
+        - protocol: TCP
+          port: 1435
+        - protocol: TCP
+          port: 61435
+        - protocol: TCP
+          port: 135
+        - protocol: TCP
+          port: 10000
+          endPort: 11000
+        - protocol: TCP
+          port: 49152
+          endPort: 65535
+
     - from:
         - namespaceSelector:
             matchLabels:
@@ -24,15 +57,3 @@ spec:
       ports:
         - protocol: TCP
           port: 1435
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              demo.openshift.io/role: rogue
-          podSelector:
-            matchLabels:
-              demo.openshift.io/security-group: rogue
-      ports:
-        - protocol: TCP
-          port: 1435
-        - protocol: TCP
-          port: 61435

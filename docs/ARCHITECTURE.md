@@ -1,58 +1,86 @@
 # Architecture
 
-## Lab network
+## Final two-plane design
 
 ```text
-Physical / node network   10.10.10.0/24
-OpenShift pod network     10.132.0.0/14
-OpenShift service network 172.31.0.0/16
+                    OpenShift
 
-NSX demo Primary Layer2 CUDN
-192.0.2.0/24
-Persistent IPAM
+ PRIMARY CUDN WORKLOAD PLANE           DEFAULT-NETWORK ADMIN PLANE
+ ---------------------------           ---------------------------
+ nsx-demo 192.0.2.0/24                 nsx-admin-* namespaces
+          |                                     |
+  Windows APP / DB / RHEL               admin-app-target:8443
+          ^                                     ^
+          |                                     |
+ CUDN client probes                    corp / jenkins / rogue
+          |                                     |
+   NetworkPolicy                         ANP / BANP
 ```
 
-## VM layout
+The admin namespaces are intentionally not selected by the CUDN. They have no `k8s.ovn.org/primary-user-defined-network` label.
+
+## CUDN workload topology
 
 ```text
-                          CUDN nsx-demo
-                          192.0.2.0/24
-                                  |
-                  +---------------+---------------+
-                  |               |               |
-                  v               v               v
-             WIN2022-APP      WIN2022-DB       RHEL9-OPS
-             namespace app    namespace db     namespace ops
-             sg=app           sg=db            sg=jenkins
-             TCP/8443         TCP/1435          TCP/9090
-                              TCP/61435
-                              TCP/8080
+                         CUDN nsx-demo
+                         192.0.2.0/24
+                               |
+        +----------------------+----------------------+
+        |                      |                      |
+  nsx-demo-app            nsx-demo-db            nsx-demo-ops
+        |                      |                      |
+   win2022-app             win2022-db              rhel9-ops
+     :8443            :1435/:61435/:8080             :9090
+        |
+   app-probe client
+
+  nsx-demo-corp -> corporate-client
+  nsx-demo-rogue -> rogue-client
 ```
 
-The VM template labels propagate to the `virt-launcher` pods. OVN policy selectors therefore provide the NSX-style dynamic-group behavior.
-
-## Policy hierarchy
+## Admin policy topology
 
 ```text
-AdminNetworkPolicy          centrally owned / strongest
-          |
-          | Pass or no decision
-          v
-namespace NetworkPolicy     application-owned
-          |
-          | no decision
-          v
-BaselineAdminNetworkPolicy  lowest / baseline guardrail
+nsx-admin-corp/admin-corporate-client -----+
+                                            |
+nsx-admin-ops/admin-jenkins-client ---------+--> nsx-admin-app/admin-app-target:8443
+                                            |
+nsx-admin-rogue/admin-rogue-client --------+
+
+Stage 1: BANP
+  Corporate DENY
+  Jenkins   DENY
+  Rogue     ALLOW
+
+Stage 4: ANP + existing BANP
+  Corporate ANP Allow -> ALLOW
+  Rogue     ANP Deny  -> DENY
+  Jenkins   ANP Pass  -> BANP Deny -> DENY
 ```
 
-## Final expected matrix
+## Real VM policy matrix
 
-| Source | Destination | Port | Result | Reason |
-|---|---|---:|:---:|---|
-| APP | Win2022 DB | 1435 | ALLOW | ANP `Allow` |
-| APP | Win2022 DB | 61435 | ALLOW | ANP `Allow` |
-| APP | Win2022 DB | 8080 | DENY | DB NetworkPolicy does not permit it |
-| Rogue | Win2022 DB | 1435 | DENY | ANP `Deny` overrides namespace allow |
-| Jenkins | Win2022 DB | 1435 | ALLOW | ANP `Pass` -> NetworkPolicy allows |
-| Jenkins | Win2022 DB | 61435 | DENY | ANP `Pass` -> NetworkPolicy does not allow |
-| Corporate | Win2022 APP | 8443 | ALLOW | NetworkPolicy overrides BANP |
+| Source | Target | Port | Result after Stage 3 | Enforcement |
+|---|---|---:|---:|---|
+| Corporate | Win2022 APP | 8443 | DENY | APP NetworkPolicy |
+| APP | Win2022 APP | 8443 | ALLOW | APP NetworkPolicy |
+| APP | Win2022 DB | 1435 | ALLOW | DB NetworkPolicy |
+| APP | Win2022 DB | 61435 | ALLOW | DB NetworkPolicy |
+| APP | Win2022 DB | 8080 | DENY | absent from DB allow list |
+| Jenkins | Win2022 DB | 1435 | ALLOW | DB NetworkPolicy |
+| Jenkins | Win2022 DB | 61435 | DENY | absent from Jenkins allow list |
+| Rogue | Win2022 DB | 1435 | DENY | no Rogue allow rule |
+
+## Policy hierarchy concept
+
+```text
+AdminNetworkPolicy
+        |
+        v
+namespace NetworkPolicy
+        |
+        v
+BaselineAdminNetworkPolicy
+```
+
+The final demo does not claim that all three APIs act on the same network attachment. It uses NetworkPolicy for the validated Primary-CUDN VM workload path and uses dedicated default-network workloads to demonstrate ANP/BANP behavior and precedence.

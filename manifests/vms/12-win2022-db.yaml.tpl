@@ -37,7 +37,7 @@ spec:
           disks:
             - name: rootdisk
               disk:
-                bus: virtio
+                bus: sata
             - name: sysprep
               cdrom:
                 bus: sata

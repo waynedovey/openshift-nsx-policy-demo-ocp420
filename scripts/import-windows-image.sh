@@ -9,7 +9,8 @@ IMAGE="${1:-}"
 [[ -f "$IMAGE" ]] || { fail "File not found: $IMAGE"; exit 1; }
 command -v virtctl >/dev/null 2>&1 || { fail "virtctl is required for image upload"; exit 1; }
 
-SIZE="${WINDOWS_IMAGE_SIZE:-64Gi}"
+SIZE="${WINDOWS_IMAGE_SIZE:-70Gi}"
+SC="${WINDOWS_STORAGE_CLASS:-ocs-external-storagecluster-ceph-rbd}"
 
 if oc get datasource "$WINDOWS_DATASOURCE" -n "$WINDOWS_DATASOURCE_NS" >/dev/null 2>&1; then
   fail "DataSource $WINDOWS_DATASOURCE_NS/$WINDOWS_DATASOURCE already exists. Refusing to overwrite it."
@@ -17,19 +18,29 @@ if oc get datasource "$WINDOWS_DATASOURCE" -n "$WINDOWS_DATASOURCE_NS" >/dev/nul
 fi
 
 info "Uploading generalized Windows Server 2022 image"
-echo "Namespace:  $WINDOWS_DATASOURCE_NS"
-echo "DataSource: $WINDOWS_DATASOURCE"
-echo "Size:       $SIZE"
+echo "Namespace:     $WINDOWS_DATASOURCE_NS"
+echo "DataSource:    $WINDOWS_DATASOURCE"
+echo "StorageClass:  $SC"
+echo "Size:          $SIZE"
 
-virtctl image-upload dv "$WINDOWS_DATASOURCE" \
-  -n "$WINDOWS_DATASOURCE_NS" \
-  --datasource \
-  --size="$SIZE" \
-  --image-path="$IMAGE" \
-  ${VIRTCTL_UPLOAD_EXTRA_ARGS:-}
+args=(
+  image-upload dv "$WINDOWS_DATASOURCE"
+  --namespace="$WINDOWS_DATASOURCE_NS"
+  --datasource
+  --size="$SIZE"
+  --image-path="$IMAGE"
+  --storage-class="$SC"
+  --access-mode=ReadWriteOnce
+  --wait-secs=600
+)
+if virtctl image-upload --help 2>&1 | grep -q -- '--volume-mode'; then
+  args+=(--volume-mode=block)
+fi
+virtctl "${args[@]}" ${VIRTCTL_UPLOAD_EXTRA_ARGS:-}
 
 oc label datasource "$WINDOWS_DATASOURCE" -n "$WINDOWS_DATASOURCE_NS" \
   demo.openshift.io/windows-version=2022 \
   demo.openshift.io/purpose=nsx-policy-demo --overwrite >/dev/null
 
+oc get datasource "$WINDOWS_DATASOURCE" -n "$WINDOWS_DATASOURCE_NS" >/dev/null
 ok "Windows boot source ready: $WINDOWS_DATASOURCE_NS/$WINDOWS_DATASOURCE"
